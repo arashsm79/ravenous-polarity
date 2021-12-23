@@ -1,4 +1,4 @@
-use std::{error::Error, option::Option};
+use std::{error::Error, option::Option, rc::Rc};
 
 struct CSP {
     row_size: usize,
@@ -8,6 +8,7 @@ struct CSP {
     col_pos_poles: Vec<i32>,
     col_neg_poles: Vec<i32>,
     board: Vec<Vec<BoardCell>>,
+    board_variable_association: Vec<Vec<usize>>,
     variables: Vec<Variable>,
 }
 
@@ -24,7 +25,7 @@ type Assignment = Vec<Value>;
 type Domain = Vec<Vec<Value>>;
 
 // A magnet slot can either be empty or be placed in one of the two directions
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Value {
     Pole1PositivePole2Negative,
     Pole2PositivePole1Negative,
@@ -51,6 +52,7 @@ impl CSP {
         mut raw_board: Vec<Vec<u8>>,
     ) -> CSP {
         let board = vec![vec![BoardCell::Empty; col_size]; row_size];
+        let board_variable_association = vec![vec![0; col_size]; row_size];
         let mut variables: Vec<Variable> = Vec::new();
         let mut variable_index = 0;
         for i in 0..row_size {
@@ -69,6 +71,8 @@ impl CSP {
                             pole2_row: down_i,
                             pole2_col: j,
                         });
+                        board_variable_association[i][j] = variable_index;
+                        board_variable_association[down_i][j] = variable_index;
                         variable_index += 1;
                     }
                 } else if raw_board[i][j] == 0 {
@@ -85,6 +89,8 @@ impl CSP {
                             pole2_row: i,
                             pole2_col: right_j,
                         });
+                        board_variable_association[i][j] = variable_index;
+                        board_variable_association[i][right_j] = variable_index;
                         variable_index += 1;
                     }
                 }
@@ -98,6 +104,7 @@ impl CSP {
             col_pos_poles,
             col_neg_poles,
             board,
+            board_variable_association,
             variables,
         }
     }
@@ -112,8 +119,8 @@ impl CSP {
             return Some(assignment)
         }
 
-        let var_index = self.select_unassigned_variable(&assignment);
-        for value in self.order_domain_values(var_index, &assignment) {
+        let var_index = self.select_unassigned_variable(&domains, &assignment);
+        for value in self.order_domain_values(var_index, &domain, &assignment) {
             if self.is_consistent(value, var_index, assignment) {
                 self.assign(value, var_index, assignmen);
                 let (feasable, inferred_domains) = inference(var_index, domains, assignment);
@@ -129,16 +136,31 @@ impl CSP {
         None
     }
 
-    fn select_unassigned_variable(&self, assignment: &Assignment) -> usize {
-        0
+    // This function uses the MRV heuristic
+    fn select_unassigned_variable(&self, domains: &Domain, assignment: &Assignment) -> usize {
+        let mut mrv_index = 0;
+        let mut mrv_value = std::usize::MAX;
+        for i in 0..self.variables.len() {
+            if assignment[i] == Value::Unassigned {
+                if domains[i].len() < mrv_value {
+                    mrv_value = domains[i].len();
+                    mrv_index = i;
+                }
+            }
+        }
+        mrv_index
     }
 
-    fn order_domain_values(&self, var_index: usize, assignment: &Assignment) -> Vec<Value> {
-        vec![]
+    fn order_domain_values(&self, var_index: usize,domains: &Domain, assignment: &Assignment) -> Vec<Value> {
+        for value in domains {
+            
+        }
     }
 
     fn is_complete(&self, assignment: &Assignment) -> bool {
-        false
+        assignment
+            .iter()
+            .fold(true, |acc, v| acc & (*v != Value::Unassigned))
     }
 }
 
