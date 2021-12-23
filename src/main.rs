@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, rc::Rc};
 
 struct CSP {
     row_size: usize,
@@ -14,11 +14,11 @@ struct CSP {
 // A magnet slot
 #[derive(Debug, Clone)]
 struct Variable {
+    index: usize,
     pole1_row: usize,
     pole1_col: usize,
     pole2_row: usize,
     pole2_col: usize,
-    value: Value,
 }
 
 // A magnet slot can either be empty or be placed in one of the two directions
@@ -47,9 +47,9 @@ impl CSP {
         col_neg_poles: Vec<i32>,
         mut raw_board: Vec<Vec<u8>>,
     ) -> CSP {
-
         let board = vec![vec![BoardCell::Empty; col_size]; row_size];
         let mut variables: Vec<Variable> = Vec::new();
+        let mut variable_index = 0;
         for i in 0..row_size {
             for j in 0..col_size {
                 if raw_board[i][j] == 1 {
@@ -59,7 +59,8 @@ impl CSP {
                     } else {
                         raw_board[i][j] = 2;
                         raw_board[down_i][j] = 2;
-                        variables.push(Variable { pole1_row: i, pole1_col: j, pole2_row: down_i, pole2_col: j, value: Value::Empty });
+                        variables.push(Variable { index: variable_index, pole1_row: i, pole1_col: j, pole2_row: down_i, pole2_col: j});
+                        variable_index += 1;
                     }
                 } else if raw_board[i][j] == 0 {
                     let right_j = j + 1;
@@ -68,14 +69,16 @@ impl CSP {
                     } else {
                         raw_board[i][j] = 2;
                         raw_board[i][right_j] = 2;
-                        variables.push(Variable { pole1_row: i, pole1_col: j, pole2_row: i, pole2_col: right_j, value: Value::Empty });
+                        variables.push(Variable { index: variable_index, pole1_row: i, pole1_col: j, pole2_row: i, pole2_col: right_j});
+                        variable_index += 1;
                     }
                 }
             }
         }
         CSP { row_size, col_size, row_pos_poles, row_neg_poles, col_pos_poles, col_neg_poles, board, variables}
     }
-    fn backtrack(self) -> () {}
+    fn solve(self) -> () {}
+    fn backtrack(self, domains: Vec<Vec<Value>>, assignment: Vec<Value>) -> () {}
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
