@@ -1,4 +1,4 @@
-use std::{error::Error, rc::Rc};
+use std::{error::Error, option::Option};
 
 struct CSP {
     row_size: usize,
@@ -20,6 +20,8 @@ struct Variable {
     pole2_row: usize,
     pole2_col: usize,
 }
+type Assignment = Vec<Value>;
+type Domain = Vec<Vec<Value>>;
 
 // A magnet slot can either be empty or be placed in one of the two directions
 #[derive(Debug, Clone)]
@@ -27,6 +29,7 @@ enum Value {
     Pole1PositivePole2Negative,
     Pole2PositivePole1Negative,
     Empty,
+    Unassigned
 }
 
 // Each single 1x1 cell in the board can have either one of these values.
@@ -59,7 +62,13 @@ impl CSP {
                     } else {
                         raw_board[i][j] = 2;
                         raw_board[down_i][j] = 2;
-                        variables.push(Variable { index: variable_index, pole1_row: i, pole1_col: j, pole2_row: down_i, pole2_col: j});
+                        variables.push(Variable {
+                            index: variable_index,
+                            pole1_row: i,
+                            pole1_col: j,
+                            pole2_row: down_i,
+                            pole2_col: j,
+                        });
                         variable_index += 1;
                     }
                 } else if raw_board[i][j] == 0 {
@@ -69,16 +78,68 @@ impl CSP {
                     } else {
                         raw_board[i][j] = 2;
                         raw_board[i][right_j] = 2;
-                        variables.push(Variable { index: variable_index, pole1_row: i, pole1_col: j, pole2_row: i, pole2_col: right_j});
+                        variables.push(Variable {
+                            index: variable_index,
+                            pole1_row: i,
+                            pole1_col: j,
+                            pole2_row: i,
+                            pole2_col: right_j,
+                        });
                         variable_index += 1;
                     }
                 }
             }
         }
-        CSP { row_size, col_size, row_pos_poles, row_neg_poles, col_pos_poles, col_neg_poles, board, variables}
+        CSP {
+            row_size,
+            col_size,
+            row_pos_poles,
+            row_neg_poles,
+            col_pos_poles,
+            col_neg_poles,
+            board,
+            variables,
+        }
     }
-    fn solve(self) -> () {}
-    fn backtrack(self, domains: Vec<Vec<Value>>, assignment: Vec<Value>) -> () {}
+    fn solve(self) -> Option<Assignment> {
+        let initial_assignment: Assignment = vec![Value::Unassigned; self.variables.len()];
+        let initial_domain: Domain = vec![vec![Value::Pole1PositivePole2Negative, Value::Pole2PositivePole1Negative, Value::Empty]; self.variables.len()];
+        self.backtrack(initial_domain, initial_assignment)
+    }
+    fn backtrack(self, domains: Domain, assignment: Assignment) -> Option<Assignment> {
+
+        if self.is_complete(&assignment) {
+            return Some(assignment)
+        }
+
+        let var_index = self.select_unassigned_variable(&assignment);
+        for value in self.order_domain_values(var_index, &assignment) {
+            if self.is_consistent(value, var_index, assignment) {
+                self.assign(value, var_index, assignmen);
+                let (feasable, inferred_domains) = inference(var_index, domains, assignment);
+                if feasable {
+                    if Some(result) = self.backtrack(inferred_domains, assignment) {
+                        return Some(result)
+                    }
+                }
+                self.unassign(value, var_index, assignmen);
+            }
+        }
+
+        None
+    }
+
+    fn select_unassigned_variable(&self, assignment: &Assignment) -> usize {
+        0
+    }
+
+    fn order_domain_values(&self, var_index: usize, assignment: &Assignment) -> Vec<Value> {
+        vec![]
+    }
+
+    fn is_complete(&self, assignment: &Assignment) -> bool {
+        false
+    }
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
