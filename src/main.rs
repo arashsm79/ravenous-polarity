@@ -134,36 +134,39 @@ impl CSP {
             ];
             self.variables.len()
         ];
-        self.backtrack(initial_domain, initial_assignment)
+        self.backtrack(initial_domain, initial_assignment, 100)
     }
 
-    fn backtrack(&mut self, domains: Domain, mut assignment: Assignment) -> Option<Assignment> {
+    fn backtrack(&mut self, domains: Domain, mut assignment: Assignment, depth: u32) -> Option<Assignment> {
+        if depth == 0 {
+            return None
+        }
         if self.is_complete(&assignment) {
             return Some(assignment);
         }
 
-        let var_index = self.select_unassigned_variable(&domains, &assignment);
-        for value in self.order_domain_values(var_index, &domains, &assignment) {
-            if self.assign(value, var_index, &mut assignment) {
-                if self.is_consistent(&assignment) {
-                    let (feasable, inferred_domains) =
+        if let Some(var_index) =  self.select_unassigned_variable(&domains, &assignment) {
+            for value in self.order_domain_values(var_index, &domains, &assignment) {
+                if self.assign(value, var_index, &mut assignment) {
+                    if self.is_consistent(&assignment) {
+                        let (feasable, inferred_domains) =
                         self.inference(value, var_index, &domains, &assignment);
-                    if feasable {
-                        if let Some(result) = self.backtrack(inferred_domains, assignment.clone()) {
-                            return Some(result);
+                        if feasable {
+                            if let Some(result) = self.backtrack(inferred_domains, assignment.clone(), depth - 1) {
+                                return Some(result);
+                            }
                         }
                     }
+                    self.unassign(var_index, &mut assignment);
                 }
-                self.unassign(var_index, &mut assignment);
             }
         }
-
         None
     }
 
     fn remove_value_from_domain(value: Value, domain: &mut Vec<Value>) -> bool {
-        if domain.contains(&Value::Pole1PositivePole2Negative) {
-            if let Some(pos) = domain.iter().position(|x| *x == Value::Pole1PositivePole2Negative) {
+        if domain.contains(&value) {
+            if let Some(pos) = domain.iter().position(|x| *x == value) {
                 domain.swap_remove(pos);
                 return true
             }
@@ -269,28 +272,28 @@ impl CSP {
     fn print_board(&self) {
         print!("{:8}", ' ');
         for i in &self.col_pos_poles {
-            print!("{:3} ", i);
+            print!("{:4}", i);
         }
         println!();
-        print!("{:4}", ' ');
+        print!("{:8}", ' ');
         for i in &self.col_neg_poles {
-            print!("{:3} ", i);
+            print!("{:4}", i);
         }
         println!();
         for i in 0..self.row_size {
-            print!("{:4} ", self.row_pos_poles[i]);
-            print!("{:4} ", self.row_neg_poles[i]);
+            print!("{:4}", self.row_pos_poles[i]);
+            print!("{:4}", self.row_neg_poles[i]);
 
             for cell in &self.board[i] {
                 match cell {
                     BoardCell::Positive => {
-                        print!(" + ");
+                        print!("   {}", '+');
                     }
                     BoardCell::Negative => {
-                        print!(" - ");
+                        print!("   {}", '-');
                     }
                     BoardCell::Empty => {
-                        print!("   ");
+                        print!("   {}", ' ');
                     }
                 }
             }
@@ -335,10 +338,11 @@ impl CSP {
         let v = &self.variables[var_index];
         self.board[v.poles[0].row][v.poles[0].col] = BoardCell::Empty;
         self.board[v.poles[1].row][v.poles[1].col] = BoardCell::Empty;
+        assignment[var_index] = Value::Unassigned;
     }
 
     // This function uses the MRV heuristic
-    fn select_unassigned_variable(&self, domains: &Domain, assignment: &Assignment) -> usize {
+    fn select_unassigned_variable(&self, domains: &Domain, assignment: &Assignment) -> Option<usize> {
         let mut mrv_index = 0;
         let mut mrv_value = std::usize::MAX;
         for i in 0..self.variables.len() {
@@ -349,7 +353,12 @@ impl CSP {
                 }
             }
         }
-        mrv_index
+
+        if assignment[mrv_index] == Value::Unassigned {
+            Some(mrv_index)
+        } else {
+            None
+        }
     }
 
     fn order_domain_values(
@@ -454,7 +463,7 @@ impl CSP {
                 col: cell.col,
             });
         }
-        if cell.row - 1 >= 0 {
+        if cell.row as i64 - 1 >= 0 {
             neighboring_cells.push(Point {
                 row: cell.row - 1,
                 col: cell.col,
@@ -466,7 +475,7 @@ impl CSP {
                 col: cell.col + 1,
             });
         }
-        if cell.col - 1 >= 0 {
+        if cell.col as i64 - 1 >= 0 {
             neighboring_cells.push(Point {
                 row: cell.row,
                 col: cell.col - 1,
@@ -476,12 +485,9 @@ impl CSP {
     }
 
     fn is_complete(&self, assignment: &Assignment) -> bool {
-        assignment
-            .iter()
-            .fold(true, |acc, v| acc & (*v != Value::Unassigned))
-    }
-
-    fn is_consistent(&self, assignment: &Assignment) -> bool {
+        if !assignment.iter().fold(true, |acc, v| acc & (*v != Value::Unassigned)) {
+            return false
+        }
         // check rows limits for pos and neg
         for i in 0..self.row_size {
             let mut count_pos = 0;
@@ -509,6 +515,40 @@ impl CSP {
                 }
             }
             if count_pos != self.col_pos_poles[j] || count_neg != self.col_neg_poles[j] {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn is_consistent(&self, assignment: &Assignment) -> bool {
+        // check rows limits for pos and neg
+        for i in 0..self.row_size {
+            let mut count_pos = 0;
+            let mut count_neg = 0;
+            for j in 0..self.col_size {
+                if self.board[i][j] == BoardCell::Positive {
+                    count_pos += 1;
+                } else if self.board[i][j] == BoardCell::Negative {
+                    count_neg += 1;
+                }
+            }
+            if count_pos > self.row_pos_poles[i] || count_neg > self.row_neg_poles[i] {
+                return false;
+            }
+        }
+        // check column limits for pos and neg
+        for j in 0..self.col_size {
+            let mut count_pos = 0;
+            let mut count_neg = 0;
+            for i in 0..self.row_size {
+                if self.board[i][j] == BoardCell::Positive {
+                    count_pos += 1;
+                } else if self.board[i][j] == BoardCell::Negative {
+                    count_neg += 1;
+                }
+            }
+            if count_pos > self.col_pos_poles[j] || count_neg > self.col_neg_poles[j] {
                 return false;
             }
         }
