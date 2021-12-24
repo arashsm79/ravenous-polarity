@@ -43,6 +43,13 @@ enum BoardCell {
     Empty,
 }
 
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FCMode {
+    ARC,
+    MAC
+}
+
 impl CSP {
     fn new(
         row_size: usize,
@@ -140,7 +147,7 @@ impl CSP {
             if self.assign(value, var_index, &mut assignment) {
                 if self.is_consistent(&assignment) {
                     let (feasable, inferred_domains) =
-                        self.inference(var_index, &domains, &assignment);
+                        self.inference(value, var_index, &domains, &assignment);
                     if feasable {
                         if let Some(result) = self.backtrack(inferred_domains, assignment.clone()) {
                             return Some(result);
@@ -154,13 +161,109 @@ impl CSP {
         None
     }
 
-    fn inference(
+    fn remove_value_from_domain(value: Value, domain: &mut Vec<Value>) -> bool {
+        if domain.contains(&Value::Pole1PositivePole2Negative) {
+            if let Some(pos) = domain.iter().position(|x| *x == Value::Pole1PositivePole2Negative) {
+                domain.swap_remove(pos);
+                return true
+            }
+        }
+        false
+    }
+
+    fn forward_checking(
         &self,
+        value: Value,
+        var_index: usize,
+        domains: &Domain,
+        assignment: &Assignment,
+    ) -> (bool, Domain) {
+        let mut inferred_domains = domains.clone();
+        if self.forward_check_neighbor_constraints(value, var_index, &mut inferred_domains, assignment)
+            && self.forward_check_limit_constraints(value, var_index, &mut inferred_domains, assignment){
+            (true, inferred_domains)
+        } else {
+            (false, vec![])
+        }
+    }
+
+    fn forward_check_neighbor_constraints(
+        &self,
+        value: Value,
+        var_index: usize,
+        inferred_domains: &mut Domain,
+        assignment: &Assignment,
+    ) -> bool {
+        let variable = &self.variables[var_index];
+        for pole in &variable.poles {
+            // returns the cells around the given pole.
+            let neighboring_cells = self.get_neighboring_cells(pole);
+            let pole_number = CSP::get_pole_number(variable, pole);
+            for neighbor_cell in neighboring_cells {
+                let neighbor_index = self.board_variable_association[neighbor_cell.row][neighbor_cell.col];
+                if neighbor_index == var_index || assignment[neighbor_index] != Value::Unassigned { continue; }
+                let neighbor = &self.variables[neighbor_index];
+                let neighbor_pole_number = CSP::get_pole_number(neighbor, &neighbor_cell);
+                let mut domain_changed = false;
+
+                if value == Value::Pole1PositivePole2Negative {
+                    if pole_number == 0 && neighbor_pole_number == 0 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole1PositivePole2Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 0 && neighbor_pole_number == 1 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole2PositivePole1Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 1 && neighbor_pole_number == 0 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole2PositivePole1Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 1 && neighbor_pole_number == 1 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole1PositivePole2Negative, &mut inferred_domains[neighbor_index]);
+                    }
+                } else if value == Value::Pole2PositivePole1Negative {
+                    if pole_number == 0 && neighbor_pole_number == 0 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole2PositivePole1Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 0 && neighbor_pole_number == 1 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole1PositivePole2Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 1 && neighbor_pole_number == 0 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole1PositivePole2Negative, &mut inferred_domains[neighbor_index]);
+                    } else if pole_number == 1 && neighbor_pole_number == 1 {
+                        domain_changed = CSP::remove_value_from_domain(Value::Pole2PositivePole1Negative, &mut inferred_domains[neighbor_index]);
+                    }
+                }
+                if domain_changed && inferred_domains[neighbor_index].len() == 0 {
+                    return false
+                }
+            }
+        }
+        true
+    }
+
+    fn forward_check_limit_constraints(
+        &self,
+        value: Value,
+        var_index: usize,
+        inferred_domains: &mut Domain,
+        assignment: &Assignment,
+    ) -> bool {
+        true
+    }
+
+    fn maintatining_arc_consistency(
+        &self,
+        value: Value,
         var_index: usize,
         domains: &Domain,
         assignment: &Assignment,
     ) -> (bool, Domain) {
         (true, vec![])
+    }
+
+    fn inference(
+        &self,
+        value: Value,
+        var_index: usize,
+        domains: &Domain,
+        assignment: &Assignment,
+    ) -> (bool, Domain) {
+        self.forward_checking(value, var_index, domains, assignment)
+        // self.maintatining_arc_consistency(value, var_index, domains, assignment)
     }
 
     fn print_board(&self) {
@@ -281,6 +384,16 @@ impl CSP {
         0
     }
 
+    fn get_pole_number(variable: &Variable, cell: &Point) -> u8 {
+        if cell.row == variable.poles[0].row
+        && cell.col == variable.poles[0].col
+        {
+            0
+        } else {
+            1
+        }
+    }
+
     fn calculate_neighbor_based_constraint_score(
         &self,
         value: Value,
@@ -289,175 +402,75 @@ impl CSP {
         assignment: &Assignment,
     ) -> i32 {
         let mut constraint_score = 0;
-        // returns the cells around the given pole. In this case pole1
-        let neighboring_cells = self.get_neighboring_cells_around_pole(var_index, 1);
-        for neighbor_cell in neighboring_cells {
-            let neighbor_index = self.board_variable_association[neighbor_cell.0][neighbor_cell.1];
-            let neighbor = &self.variables[neighbor_index];
-            match value {
-                //pole1 is positive, thus the neighboring cells cant be positive
-                Value::Pole1PositivePole2Negative => {
-                    // If this neighboring cell is the pole1 of the neighbor variable
-                    if neighbor_cell.0 == neighbor.pole1_row
-                        && neighbor_cell.1 == neighbor.pole1_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    // If this neighboring cell is the pole2 of the neighbor variable
-                    } else if neighbor_cell.0 == neighbor.pole2_row
-                        && neighbor_cell.1 == neighbor.pole2_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    }
-                }
-                //pole1 is negative, thus the neighboring cells cant be negative
-                Value::Pole2PositivePole1Negative => {
-                    // If this neighboring cell is the pole1 of the neighbor variable
-                    if neighbor_cell.0 == neighbor.pole1_row
-                        && neighbor_cell.1 == neighbor.pole1_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    // If this neighboring cell is the pole2 of the neighbor variable
-                    } else if neighbor_cell.0 == neighbor.pole2_row
-                        && neighbor_cell.1 == neighbor.pole2_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        }
+        let variable = &self.variables[var_index];
+        for pole in &variable.poles {
+            // returns the cells around the given pole.
+            let neighboring_cells = self.get_neighboring_cells(pole);
+            let pole_number = CSP::get_pole_number(variable, pole);
+            for neighbor_cell in neighboring_cells {
+                let neighbor_index = self.board_variable_association[neighbor_cell.row][neighbor_cell.col];
+                if neighbor_index == var_index { continue; }
+                let neighbor = &self.variables[neighbor_index];
+                let neighbor_pole_number = CSP::get_pole_number(neighbor, &neighbor_cell);
+                let mut increase_constraint_score = false;
 
-        // returns the cells around the given pole. In this case pole2
-        let neighboring_cells = self.get_neighboring_cells_around_pole(var_index, 2);
-        for neighbor_cell in neighboring_cells {
-            let neighbor_index = self.board_variable_association[neighbor_cell.0][neighbor_cell.1];
-            let neighbor = &self.variables[neighbor_index];
-            match value {
-                //pole2 is negative, thus the neighboring cells cant be negative
-                Value::Pole1PositivePole2Negative => {
-                    // If this neighboring cell is the pole1 of the neighbor variable
-                    if neighbor_cell.0 == neighbor.pole1_row
-                        && neighbor_cell.1 == neighbor.pole1_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    // If this neighboring cell is the pole2 of the neighbor variable
-                    } else if neighbor_cell.0 == neighbor.pole2_row
-                        && neighbor_cell.1 == neighbor.pole2_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
+                if value == Value::Pole1PositivePole2Negative {
+                    if pole_number == 0 && neighbor_pole_number == 0 {
+                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 0 && neighbor_pole_number == 1 {
+                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 1 && neighbor_pole_number == 0 {
+                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 1 && neighbor_pole_number == 1 {
+                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) { increase_constraint_score = true; }
+                    }
+                } else if value == Value::Pole2PositivePole1Negative {
+                    if pole_number == 0 && neighbor_pole_number == 0 {
+                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 0 && neighbor_pole_number == 1 {
+                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 1 && neighbor_pole_number == 0 {
+                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) { increase_constraint_score = true; }
+                    } else if pole_number == 1 && neighbor_pole_number == 1 {
+                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) { increase_constraint_score = true; }
                     }
                 }
-                //pole2 is positive, thus the neighboring cells cant be positive
-                Value::Pole2PositivePole1Negative => {
-                    // If this neighboring cell is the pole1 of the neighbor variable
-                    if neighbor_cell.0 == neighbor.pole1_row
-                        && neighbor_cell.1 == neighbor.pole1_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
-                    // If this neighboring cell is the pole2 of the neighbor variable
-                    } else if neighbor_cell.0 == neighbor.pole2_row
-                        && neighbor_cell.1 == neighbor.pole2_col
-                    {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            constraint_score += 1;
-                            // if this is the only possible value
-                            // increase constraint_score
-                            if domains[neighbor_index].len() == 1 {
-                                constraint_score += 5;
-                            }
-                        }
+                if increase_constraint_score {
+                    constraint_score += 1;
+                    if domains[neighbor_index].len() == 1 {
+                        constraint_score += 5;
                     }
                 }
-                _ => {}
             }
         }
         constraint_score
     }
 
-    fn get_neighboring_cells_around_pole(
-        &self,
-        var_index: usize,
-        pole_number: u8,
-    ) -> Vec<(usize, usize)> {
-        let mut neighboring_cells: Vec<(usize, usize)> = Vec::new();
-        let v = &self.variables[var_index];
-
-        if pole_number == 1 {
-            if v.poles[0].row + 1 < self.row_size && v.poles[0].row != v.poles[1].row {
-                neighboring_cells.push((v.poles[0].row + 1, v.poles[0].col));
-            }
-            if v.poles[0].row - 1 >= 0 && v.poles[0].row != v.poles[1].row {
-                neighboring_cells.push((v.poles[0].row - 1, v.poles[0].col));
-            }
-            if v.poles[0].col + 1 < self.col_size && v.poles[0].col != v.poles[1].col {
-                neighboring_cells.push((v.poles[0].row, v.poles[0].col + 1));
-            }
-            if v.poles[0].col - 1 >= 0 && v.poles[0].col != v.poles[1].col {
-                neighboring_cells.push((v.poles[0].row, v.poles[0].col - 1));
-            }
-        } else if pole_number == 2 {
-            if v.poles[1].row + 1 < self.row_size && v.poles[0].row != v.poles[1].row {
-                neighboring_cells.push((v.poles[1].row + 1, v.poles[1].col));
-            }
-            if v.poles[1].row - 1 >= 0 && v.poles[0].row != v.poles[1].row {
-                neighboring_cells.push((v.poles[1].row - 1, v.poles[1].col));
-            }
-
-            if v.poles[1].col + 1 < self.col_size && v.poles[0].col != v.poles[1].col {
-                neighboring_cells.push((v.poles[1].row, v.poles[1].col + 1));
-            }
-            if v.poles[1].col - 1 >= 0 && v.poles[0].col != v.poles[1].col {
-                neighboring_cells.push((v.poles[1].row, v.poles[1].col - 1));
-            }
+    fn get_neighboring_cells(&self, cell: &Point) -> Vec<Point> {
+        let mut neighboring_cells: Vec<Point> = Vec::new();
+        if cell.row + 1 < self.row_size {
+            neighboring_cells.push(Point {
+                row: cell.row + 1,
+                col: cell.col,
+            });
+        }
+        if cell.row - 1 >= 0 {
+            neighboring_cells.push(Point {
+                row: cell.row - 1,
+                col: cell.col,
+            });
+        }
+        if cell.col + 1 < self.col_size {
+            neighboring_cells.push(Point {
+                row: cell.row,
+                col: cell.col + 1,
+            });
+        }
+        if cell.col - 1 >= 0 {
+            neighboring_cells.push(Point {
+                row: cell.row,
+                col: cell.col - 1,
+            });
         }
         neighboring_cells
     }
