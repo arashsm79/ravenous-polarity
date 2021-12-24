@@ -151,10 +151,62 @@ impl CSP {
         mrv_index
     }
 
-    fn order_domain_values(&self, var_index: usize,domains: &Domain, assignment: &Assignment) -> Vec<Value> {
-        for value in domains {
-            
+    fn order_domain_values(&self, var_index: usize, domains: &Domain, assignment: &Assignment) -> Vec<Value> {
+        let mut ordered_domain_values: Vec<(Value, i32)> = Vec::new();
+        for value in domains[var_index] {
+            let mut constraint_score = 0;
+            let variable = self.variables[var_index];
+            let neighbors_indices = self.get_neighbors(var_index);
+            match value {
+                Value::Pole1PositivePole2Negative => {
+
+                },
+                Value::Pole2PositivePole1Negative => {
+                },
+                Value::Empty => {
+                },
+                _ => {}
+            }
         }
+        ordered_domain_values.sort_by(|a, b| a.1.cmp(&b.1));
+        ordered_domain_values
+            .iter()
+            .map(|v| v.0)
+            .collect::<Vec<Value>>()
+    }
+
+    fn get_neighbors(self, var_index: usize) -> Vec<usize> {
+        let mut neighbors: Vec<usize> = Vec::new();
+        let v = self.variables[var_index];
+
+        if v.pole1_row + 1 < self.row_size && v.pole1_row != v.pole2_row {
+            neighbors.push(self.board_variable_association[v.pole1_row + 1][v.pole1_col]);
+        }
+        if v.pole1_row - 1 >= 0 && v.pole1_row != v.pole2_row {
+            neighbors.push(self.board_variable_association[v.pole1_row - 1][v.pole1_col]);
+        }
+
+        if v.pole2_row + 1 < self.row_size && v.pole1_row != v.pole2_row {
+            neighbors.push(self.board_variable_association[v.pole2_row + 1][v.pole2_col]);
+        }
+        if v.pole2_row - 1 >= 0 && v.pole1_row != v.pole2_row {
+            neighbors.push(self.board_variable_association[v.pole2_row - 1][v.pole2_col]);
+        }
+
+        if v.pole1_col + 1 < self.col_size && v.pole1_col != v.pole2_col {
+            neighbors.push(self.board_variable_association[v.pole1_row][v.pole1_col + 1]);
+        }
+        if v.pole1_col - 1 >= 0 && v.pole1_col != v.pole2_col {
+            neighbors.push(self.board_variable_association[v.pole1_row][v.pole1_col - 1]);
+        }
+
+        if v.pole2_col + 1 < self.col_size && v.pole1_col != v.pole2_col {
+            neighbors.push(self.board_variable_association[v.pole2_row][v.pole2_col + 1]);
+        }
+        if v.pole2_col - 1 >= 0 && v.pole1_col != v.pole2_col {
+            neighbors.push(self.board_variable_association[v.pole2_row][v.pole2_col - 1]);
+        }
+        neighbors
     }
 
     fn is_complete(&self, assignment: &Assignment) -> bool {
