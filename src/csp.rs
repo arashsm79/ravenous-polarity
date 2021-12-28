@@ -232,6 +232,61 @@ impl CSP {
             _ => { None }
         }
     }
+    pub fn revise(&self, constraint_arc: &ConstraintArc, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+        match constraint_arc.constraint {
+            Constraint::NeighborBased(pole_xi, pole_xj) => {
+                self.revise_pole_constraint(constraint_arc.xi, constraint_arc.xj, pole_xi, pole_xj, inferred_domains, assignment)
+            },
+            Constraint::LimitBased(pole_xi, pole_xj) => {
+                self.revise_limit_constraint(constraint_arc.xi, constraint_arc.xj, pole_xi, pole_xj, inferred_domains, assignment)
+            }
+        }
+    }
+
+    // Revise the domains based on the neighboring cells and their signs. (two positives or two
+    // negatives can't be next to each other.
+    // returns: (feasible, revised)
+    // feasible is false if any domain is reduced to zero
+    fn revise_pole_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, pole_xi: PoleNumber, pole_xj: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+        if xi_index == xj_index {
+            return (false, false)
+        }
+        let xi_value = assignment[xi_index];
+        let mut revised = false;
+
+        if xi_value == Value::Unassigned {
+                // for each value in xi domain
+                // if there are no values avalaible in xj's domain that are consistent with the
+                // current value of xi, then delete the current value of xi
+                let mut to_be_deleted: Vec<Value> = Vec::new();
+                let mut constraint_count = 0;
+                for xi_value in &inferred_domains[xi_index] {
+                    if let Some(value) = CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, pole_xi, pole_xj) {
+                        if assignment[xj_index] != Value::Unassigned && assignment[xj_index] == value {
+                                to_be_deleted.push(*xi_value);
+                        } else if inferred_domains[xj_index].contains(&value) {
+                            constraint_count += 1;
+                        }
+                    }
+                    if constraint_count == inferred_domains[xj_index].len() {
+                        to_be_deleted.push(*xi_value);
+                    }
+                }
+                revised = !to_be_deleted.is_empty();
+                for value in to_be_deleted {
+                    CSP::remove_value_from_domain(value, &mut inferred_domains[xi_index]);
+                }
+        }
+
+        if inferred_domains[xi_index].len() == 0 {
+            return (false, false)
+        }
+        (true, revised)
+    }
+
+    fn revise_limit_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, pole_xi: PoleNumber, pole_xj: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+        (true, false)
+    } 
 
     // Generates all the constraints of the given value with respect to its neighbors
     // returns a list of binary arc constrains except for the given neighbor
@@ -258,8 +313,8 @@ impl CSP {
                 let neighbor = &self.variables[neighbor_index];
                 let neighbor_pole_number = CSP::get_pole_number(neighbor, &neighbor_cell);
                 arc_queue.push_back(ConstraintArc {
-                    xi: var_index,
-                    xj: neighbor_index,
+                    xi: neighbor_index,
+                    xj: var_index,
                     constraint: Constraint::NeighborBased(pole_number, neighbor_pole_number),
                 });
             }
@@ -275,8 +330,8 @@ impl CSP {
                 let neighbor = &self.variables[neighbor_index];
                 let neighbor_pole_number = CSP::get_pole_number(neighbor, &neighbor_cell);
                 arc_queue.push_back(ConstraintArc {
-                    xi: var_index,
-                    xj: neighbor_index,
+                    xi: neighbor_index,
+                    xj: var_index,
                     constraint: Constraint::LimitBased(pole_number, neighbor_pole_number),
                 });
             }
@@ -293,11 +348,10 @@ impl CSP {
 
         let mut arc_queue: VecDeque<ConstraintArc> = VecDeque::new();
 
+        self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
         if self.inference_mode == InferenceMode::FC {
-            self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
             self.forward_checking(domains, assignment, arc_queue)
         } else if self.inference_mode == InferenceMode::MAC {
-            self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
             self.maintaining_arc_consistency(domains, assignment, arc_queue)
         } else {
             (false, domains.clone())

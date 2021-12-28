@@ -79,6 +79,6 @@ fn init_problem(test_case_path: String) -> Result<CSP, Box<dyn Error>> {
         col_pos_poles,
         col_neg_poles,
         raw_board,
-        csp::InferenceMode::FC
+        csp::InferenceMode::MAC
     ))
 }
