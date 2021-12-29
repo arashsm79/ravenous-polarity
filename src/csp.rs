@@ -1,4 +1,4 @@
-use std::{collections::VecDeque, option::Option};
+use std::{collections::{HashSet, VecDeque}, option::Option};
 
 pub struct CSP {
     pub row_size: usize,
@@ -164,16 +164,19 @@ impl CSP {
         if depth == 0 {
             return None;
         }
+
+        println!("{:?}", assignment);
+
         if self.is_complete(&assignment) {
             return Some(assignment);
         }
 
         if let Some(var_index) = self.select_unassigned_variable(&domains, &assignment) {
-            for value in self.order_domain_values(var_index, &domains, &assignment) {
+            for value in self.order_domain_values(var_index, &domains) {
                 if self.assign(value, var_index, &mut assignment) {
-                    if self.is_consistent(&assignment) {
+                    if self.is_consistent() {
                         let (feasable, inferred_domains) =
-                            self.inference(value, var_index, &domains, &assignment);
+                            self.inference(var_index, &domains, &assignment);
                         if feasable {
                             if let Some(result) =
                                 self.backtrack(inferred_domains, assignment.clone(), depth - 1)
@@ -201,29 +204,29 @@ impl CSP {
 
     // Given the value of xi, this function retuns the value that xj cant be based on the sign of
     // the poles and their possitions
-    pub fn get_neighbor_pole_based_inconsistent_value(xi_value: Value, pole_xi: PoleNumber, pole_xj: PoleNumber) -> Option<Value> {
+    pub fn get_neighbor_pole_based_inconsistent_value(xi_value: Value, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber) -> Option<Value> {
         match xi_value {
             Value::Pole1PositivePole2Negative => {
-                if pole_xi == 0 && pole_xj == 0 {
+                if xi_pole_index == 0 && xj_pole_index == 0 {
                     Some(Value::Pole1PositivePole2Negative)
-                } else if pole_xi == 0 && pole_xj == 1 {
+                } else if xi_pole_index == 0 && xj_pole_index == 1 {
                     Some(Value::Pole2PositivePole1Negative)
-                } else if pole_xi == 1 && pole_xj == 0 {
+                } else if xi_pole_index == 1 && xj_pole_index == 0 {
                     Some(Value::Pole2PositivePole1Negative)
-                } else if pole_xi == 1 && pole_xj == 1 {
+                } else if xi_pole_index == 1 && xj_pole_index == 1 {
                     Some(Value::Pole1PositivePole2Negative)
                 } else {
                     None
                 }
             },
             Value::Pole2PositivePole1Negative => {
-                if pole_xi == 0 && pole_xj == 0 {
+                if xi_pole_index == 0 && xj_pole_index == 0 {
                     Some(Value::Pole2PositivePole1Negative)
-                } else if pole_xi == 0 && pole_xj == 1 {
+                } else if xi_pole_index == 0 && xj_pole_index == 1 {
                     Some(Value::Pole1PositivePole2Negative)
-                } else if pole_xi == 1 && pole_xj == 0 {
+                } else if xi_pole_index == 1 && xj_pole_index == 0 {
                     Some(Value::Pole1PositivePole2Negative)
-                } else if pole_xi == 1 && pole_xj == 1 {
+                } else if xi_pole_index == 1 && xj_pole_index == 1 {
                     Some(Value::Pole2PositivePole1Negative)
                 } else {
                     None
@@ -232,6 +235,7 @@ impl CSP {
             _ => { None }
         }
     }
+
     pub fn revise(&self, constraint_arc: &ConstraintArc, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
         match constraint_arc.constraint {
             Constraint::NeighborBased(pole_xi, pole_xj) => {
@@ -239,6 +243,7 @@ impl CSP {
             },
             Constraint::LimitBased(pole_xi, pole_xj) => {
                 self.revise_limit_constraint(constraint_arc.xi, constraint_arc.xj, pole_xi, pole_xj, inferred_domains, assignment)
+                // (true, false)
             }
         }
     }
@@ -247,7 +252,7 @@ impl CSP {
     // negatives can't be next to each other.
     // returns: (feasible, revised)
     // feasible is false if any domain is reduced to zero
-    fn revise_pole_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, pole_xi: PoleNumber, pole_xj: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+    fn revise_pole_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
         if xi_index == xj_index {
             return (false, false)
         }
@@ -261,7 +266,7 @@ impl CSP {
                 let mut to_be_deleted: Vec<Value> = Vec::new();
                 let mut constraint_count = 0;
                 for xi_value in &inferred_domains[xi_index] {
-                    if let Some(value) = CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, pole_xi, pole_xj) {
+                    if let Some(value) = CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, xi_pole_index, xj_pole_index) {
                         if assignment[xj_index] != Value::Unassigned && assignment[xj_index] == value {
                                 to_be_deleted.push(*xi_value);
                         } else if inferred_domains[xj_index].contains(&value) {
@@ -284,9 +289,285 @@ impl CSP {
         (true, revised)
     }
 
-    fn revise_limit_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, pole_xi: PoleNumber, pole_xj: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
-        (true, false)
+    fn revise_limit_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+        let xi_value = assignment[xi_index];
+        let mut revised = false;
+
+        if xi_value == Value::Unassigned {
+                // for each value in xi domain
+                // if there are no values avalaible in xj's domain that are consistent with the
+                // current value of xi, then delete the current value of xi
+                let mut to_be_deleted: Vec<Value> = Vec::new();
+                let mut constraint_count = 0;
+                for xi_value in &inferred_domains[xi_index] {
+                    if let Some(value) = self.get_neighbor_limit_based_inconsistent_value(xi_index, xj_index, *xi_value, xi_pole_index, xj_pole_index, assignment) {
+                        // println!("inconsistent value: {:?}", value);
+                        if assignment[xj_index] != Value::Unassigned && assignment[xj_index] == value {
+                                to_be_deleted.push(*xi_value);
+                        } else if inferred_domains[xj_index].contains(&value) {
+                            constraint_count += 1;
+                        }
+                    }
+                    if constraint_count == inferred_domains[xj_index].len() {
+                        to_be_deleted.push(*xi_value);
+                    }
+                }
+                revised = !to_be_deleted.is_empty();
+                for value in to_be_deleted {
+                    CSP::remove_value_from_domain(value, &mut inferred_domains[xi_index]);
+                }
+        }
+
+        if inferred_domains[xi_index].len() == 0 {
+            return (false, false)
+        }
+        (true, revised)
     } 
+
+    // Given the value of xi, this function retuns the value that xj cant be based on the limits of
+    // positive and negatives signs in each row
+    pub fn get_neighbor_limit_based_inconsistent_value(&self, xi_index: VariableIndex, xj_index: VariableIndex, xi_value: Value, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber, assignment: &Assignment) -> Option<Value> {
+
+        // self.print_board();
+        // println!("{:?}", assignment);
+        // println!("xi {} xj {}", xi_index, xj_index);
+        // println!("xi {:?} xj {:?}", self.variables[xi_index], self.variables[xj_index]);
+        // println!("xi_pole_i {:?} xj_pole_i {:?}", xi_pole_index, xj_pole_index);
+        // println!(" xi vlaue {:?}", xi_value);
+
+        let xi = &self.variables[xi_index];
+        let xj = &self.variables[xj_index];
+
+        let xi_pole = &xi.poles[xi_pole_index as usize];
+        let xj_pole = &xj.poles[xj_pole_index as usize];
+        // println!("xi_pole {:?} xj_pole {:?}", xi_pole, xj_pole);
+
+        // if the constrained poles of xi and xj are on the same row:
+        if xi_pole.row == xj_pole.row {
+            let mut board_row_pos_sum = 0;
+            let mut board_row_neg_sum = 0;
+            for i in 0..self.col_size {
+                // dont count the poels of xi and xj
+                if self.board_variable_association[xi_pole.row][i] == xi_index || self.board_variable_association[xi_pole.row][i] == xj_index {
+                    continue;
+                }
+                if self.board[xi_pole.row][i] == BoardCell::Positive {
+                    board_row_pos_sum += 1;
+                } else if self.board[xi_pole.row][i] == BoardCell::Negative {
+                    board_row_neg_sum += 1;
+                }
+            }
+            // println!("brps {:?}", board_row_pos_sum);
+            // println!("brns {:?}", board_row_neg_sum);
+
+            if board_row_pos_sum == self.row_pos_poles[xi_pole.row] - 1 {
+                match xi_value {
+                    Value::Pole1PositivePole2Negative => {
+                        if xi_pole_index == 0 && xj_pole_index == 0 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else if xi_pole_index == 0 && xj_pole_index == 1 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else { None }
+                    },
+                    Value::Pole2PositivePole1Negative => {
+                        if xi_pole_index == 1 && xj_pole_index == 0 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else if xi_pole_index == 1 && xj_pole_index == 1 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else { None }
+                    },
+                    _ => { None }
+                }
+            } else if board_row_neg_sum == self.row_neg_poles[xi_pole.row] - 1 {
+                match xi_value {
+                    Value::Pole1PositivePole2Negative => {
+                        if xi_pole_index == 1 && xj_pole_index == 0 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else if xi_pole_index == 1 && xj_pole_index == 1 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else { None }
+                    },
+                    Value::Pole2PositivePole1Negative => {
+                        if xi_pole_index == 0 && xj_pole_index == 0 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else if xi_pole_index == 0 && xj_pole_index == 1 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else { None }
+                    },
+                    _ => { None }
+                }
+                // xj cant be empty if it is the last unassigned variable in a row and the row
+                // constraint has not been met
+            }else if board_row_pos_sum == self.row_pos_poles[xi_pole.row] - 2 {
+                let mut unassigned_vars_in_row: HashSet<VariableIndex> = HashSet::new();
+                for i in 0..self.col_size {
+                    let curr_var_index = self.board_variable_association[xi_pole.row][i];
+                    if curr_var_index != xi_index && curr_var_index != xj_index && assignment[curr_var_index] == Value::Unassigned {
+                        unassigned_vars_in_row.insert(curr_var_index);
+                    }
+                }
+                if unassigned_vars_in_row.len() == 0 {
+                    match xi_value {
+                        Value::Pole1PositivePole2Negative => {
+                            if xi_pole_index == 0  {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        Value::Pole2PositivePole1Negative => {
+                            if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        _ => { None }
+                    }
+                } else { None }
+
+            } else if board_row_neg_sum == self.row_neg_poles[xi_pole.row] - 2 {
+                let mut unassigned_vars_in_row: HashSet<VariableIndex> = HashSet::new();
+                for i in 0..self.col_size {
+                    let curr_var_index = self.board_variable_association[xi_pole.row][i];
+                    if curr_var_index != xi_index && curr_var_index != xj_index && assignment[curr_var_index] == Value::Unassigned {
+                        unassigned_vars_in_row.insert(curr_var_index);
+                    }
+                }
+                if unassigned_vars_in_row.len() == 0 {
+                    match xi_value {
+                        Value::Pole1PositivePole2Negative => {
+                            if xi_pole_index == 1  {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        Value::Pole2PositivePole1Negative => {
+                            if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        _ => { None }
+                    }
+                } else { None }
+            } else { None }
+
+        // if the constrained poles of xi and xj are on the same col:
+        } else if xi_pole.col == xj_pole.col {
+            let mut board_col_pos_sum = 0;
+            let mut board_col_neg_sum = 0;
+            for i in 0..self.row_size {
+                // dont count the poels of xi and xj
+                if self.board_variable_association[i][xi_pole.col] == xi_index || self.board_variable_association[i][xi_pole.col] == xj_index {
+                    continue;
+                }
+                if self.board[i][xi_pole.col] == BoardCell::Positive {
+                    board_col_pos_sum += 1;
+                } else if self.board[i][xi_pole.col] == BoardCell::Negative {
+                    board_col_neg_sum += 1;
+                }
+            }
+            // println!("bcps {:?}", board_col_pos_sum);
+            // println!("bcns {:?}", board_col_neg_sum);
+
+            if board_col_pos_sum == self.col_pos_poles[xi_pole.col] - 1 {
+                match xi_value {
+                    Value::Pole1PositivePole2Negative => {
+                        if xi_pole_index == 0 && xj_pole_index == 0 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else if xi_pole_index == 0 && xj_pole_index == 1 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else { None }
+                    },
+                    Value::Pole2PositivePole1Negative => {
+                        if xi_pole_index == 1 && xj_pole_index == 0 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else if xi_pole_index == 1 && xj_pole_index == 1 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else { None }
+                    },
+                    _ => { None }
+                }
+            } else if board_col_neg_sum == self.col_neg_poles[xi_pole.col] - 1 {
+                match xi_value {
+                    Value::Pole1PositivePole2Negative => {
+                        if xi_pole_index == 1 && xj_pole_index == 0 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else if xi_pole_index == 1 && xj_pole_index == 1 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else { None }
+                    },
+                    Value::Pole2PositivePole1Negative => {
+                        if xi_pole_index == 0 && xj_pole_index == 0 {
+                            Some(Value::Pole2PositivePole1Negative)
+                        } else if xi_pole_index == 0 && xj_pole_index == 1 {
+                            Some(Value::Pole1PositivePole2Negative)
+                        } else { None }
+                    },
+                    _ => { None }
+                }
+            } else if board_col_pos_sum == self.col_pos_poles[xi_pole.col] - 2 {
+                // xj cant be empty if it is the last unassigned variable in a col and the col
+                // constraint has not been met
+                let mut unassigned_vars_in_col: HashSet<VariableIndex> = HashSet::new();
+                for i in 0..self.row_size {
+                    let curr_var_index = self.board_variable_association[i][xi_pole.col];
+                    if curr_var_index != xi_index && curr_var_index != xj_index && assignment[curr_var_index] == Value::Unassigned {
+                        unassigned_vars_in_col.insert(curr_var_index);
+                    }
+                }
+                if unassigned_vars_in_col.len() == 0 {
+                    match xi_value {
+                        Value::Pole1PositivePole2Negative => {
+                            if xi_pole_index == 0  {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        Value::Pole2PositivePole1Negative => {
+                            if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        _ => { None }
+                    }
+                } else { None }
+            } else if board_col_neg_sum == self.col_neg_poles[xi_pole.col] - 2 {
+                let mut unassigned_vars_in_col: HashSet<VariableIndex> = HashSet::new();
+                for i in 0..self.row_size {
+                    let curr_var_index = self.board_variable_association[i][xi_pole.col];
+                    if curr_var_index != xi_index && curr_var_index != xj_index && assignment[curr_var_index] == Value::Unassigned {
+                        unassigned_vars_in_col.insert(curr_var_index);
+                    }
+                }
+                if unassigned_vars_in_col.len() == 0 {
+                    match xi_value {
+                        Value::Pole1PositivePole2Negative => {
+                            if xi_pole_index == 1  {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 1 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        Value::Pole2PositivePole1Negative => {
+                            if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else if xi_pole_index == 0 {
+                                Some(Value::Empty)
+                            } else { None }
+                        },
+                        _ => { None }
+                    }
+                } else { None }
+            } else { None }
+        } else { None }
+    }
 
     // Generates all the constraints of the given value with respect to its neighbors
     // returns a list of binary arc constrains except for the given neighbor
@@ -340,7 +621,6 @@ impl CSP {
 
     fn inference(
         &self,
-        value: Value,
         var_index: usize,
         domains: &Domain,
         assignment: &Assignment,
@@ -458,13 +738,12 @@ impl CSP {
         &self,
         var_index: usize,
         domains: &Domain,
-        assignment: &Assignment,
     ) -> Vec<Value> {
         let mut ordered_domain_values: Vec<(Value, i32)> = Vec::new();
         for value in &domains[var_index] {
             let mut constraint_score = 0;
             constraint_score += self
-                .calculate_neighbor_based_constraint_score(*value, var_index, domains, assignment);
+                .calculate_neighbor_based_constraint_score(*value, var_index, domains);
             // constraint_score +=
             //     self.calculate_limits_constraint_score(value, var_index, domains, assignment);
             ordered_domain_values.push((*value, constraint_score));
@@ -476,15 +755,15 @@ impl CSP {
             .collect::<Vec<Value>>()
     }
 
-    fn calculate_limits_constraint_score(
-        &self,
-        value: Value,
-        var_index: usize,
-        domains: &Domain,
-        assignment: &Assignment,
-    ) -> i32 {
-        0
-    }
+    // fn calculate_limits_constraint_score(
+    //     &self,
+    //     value: Value,
+    //     var_index: usize,
+    //     domains: &Domain,
+    //     assignment: &Assignment,
+    // ) -> i32 {
+    //     0
+    // }
 
     pub fn get_pole_number(variable: &Variable, cell: &Point) -> u8 {
         if cell.row == variable.poles[0].row && cell.col == variable.poles[0].col {
@@ -499,7 +778,6 @@ impl CSP {
         value: Value,
         var_index: usize,
         domains: &Domain,
-        assignment: &Assignment,
     ) -> i32 {
         let mut constraint_score = 0;
         let variable = &self.variables[var_index];
@@ -654,7 +932,7 @@ impl CSP {
         true
     }
 
-    fn is_consistent(&self, assignment: &Assignment) -> bool {
+    fn is_consistent(&self) -> bool {
         // check rows limits for pos and neg
         for i in 0..self.row_size {
             let mut count_pos = 0;
