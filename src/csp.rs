@@ -54,7 +54,7 @@ pub enum BoardCell {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Constraint {
-    NeighborBased(PoleNumber, PoleNumber),
+    SignBased(PoleNumber, PoleNumber),
     LimitBased(PoleNumber, PoleNumber),
 }
 
@@ -176,7 +176,7 @@ impl CSP {
         }
 
         if let Some(var_index) = self.select_unassigned_variable(&domains, &assignment) {
-            for value in self.order_domain_values(var_index, &domains) {
+            for value in self.order_domain_values(var_index, &domains, assignment) {
                 if self.assign(value, var_index, assignment) {
                     if self.is_consistent(var_index) {
                         let (feasible, inferred_domains) =
@@ -261,7 +261,7 @@ impl CSP {
 
     pub fn revise(&self, constraint_arc: &ConstraintArc, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
         let (xi_pole_index, xj_pole_index) = match constraint_arc.constraint {
-            Constraint::NeighborBased(xi_pole_index, xj_pole_index) => {
+            Constraint::SignBased(xi_pole_index, xj_pole_index) => {
                 (xi_pole_index, xj_pole_index)
             },
             Constraint::LimitBased(xi_pole_index, xj_pole_index) => {
@@ -286,7 +286,7 @@ impl CSP {
                 let mut constraint_count = 0;
                 for xi_value in &inferred_domains[xi_index] {
                     let value_unwrapped = match constraint_arc.constraint {
-                        Constraint::NeighborBased(_, _) => {
+                        Constraint::SignBased(_, _) => {
                             CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, xi_pole_index, xj_pole_index)
                         },
                         Constraint::LimitBased(_, _) => {
@@ -337,21 +337,26 @@ impl CSP {
         // if the constrained poles of xi and xj are on the same row:
         if xi_pole.row == xj_pole.row {
             let mut board_row_pos_sum = self.curr_row_pos_poles[xi_pole.row];
-            let mut board_row_neg_sum = 0;
-            for i in 0..self.col_size {
-                // dont count the poels of xi and xj
-                if self.board_variable_association[xi_pole.row][i] == xi_index || self.board_variable_association[xi_pole.row][i] == xj_index {
-                    continue;
-                }
-                if self.board[xi_pole.row][i] == BoardCell::Positive {
-                    board_row_pos_sum += 1;
-                } else if self.board[xi_pole.row][i] == BoardCell::Negative {
-                    board_row_neg_sum += 1;
-                }
+            let mut board_row_neg_sum = self.curr_row_neg_poles[xi_pole.row];
+            // dont count the poels of xi and xj
+            if self.board[xi_pole.row][xi_pole.col] == BoardCell::Positive {
+                board_row_pos_sum -= 1;
+            }
+            if self.board[xj_pole.row][xj_pole.col] == BoardCell::Positive {
+                board_row_pos_sum -= 1;
+            }
+            if self.board[xi_pole.row][xi_pole.col] == BoardCell::Negative {
+                board_row_neg_sum -= 1;
+            }
+            if self.board[xj_pole.row][xj_pole.col] == BoardCell::Negative {
+                board_row_neg_sum -= 1;
             }
             // println!("brps {:?}", board_row_pos_sum);
             // println!("brns {:?}", board_row_neg_sum);
 
+            // the  curr row sum (without the considering the values of poles of xi and xj) is one
+            // less than the limit. Thus if the pole of si is positive then the pole of xj cant be
+            // positive
             if board_row_pos_sum == self.row_pos_poles[xi_pole.row] - 1 {
                 match xi_value {
                     Value::Pole1PositivePole2Negative => {
@@ -449,18 +454,20 @@ impl CSP {
 
         // if the constrained poles of xi and xj are on the same col:
         } else if xi_pole.col == xj_pole.col {
-            let mut board_col_pos_sum = 0;
-            let mut board_col_neg_sum = 0;
-            for i in 0..self.row_size {
-                // dont count the poels of xi and xj
-                if self.board_variable_association[i][xi_pole.col] == xi_index || self.board_variable_association[i][xi_pole.col] == xj_index {
-                    continue;
-                }
-                if self.board[i][xi_pole.col] == BoardCell::Positive {
-                    board_col_pos_sum += 1;
-                } else if self.board[i][xi_pole.col] == BoardCell::Negative {
-                    board_col_neg_sum += 1;
-                }
+            let mut board_col_pos_sum = self.curr_col_pos_poles[xi_pole.col];
+            let mut board_col_neg_sum = self.curr_col_neg_poles[xi_pole.col];
+            // dont count the poles of xi and xj
+            if self.board[xi_pole.row][xi_pole.col] == BoardCell::Positive {
+                board_col_pos_sum -= 1;
+            }
+            if self.board[xj_pole.row][xj_pole.col] == BoardCell::Positive {
+                board_col_pos_sum -= 1;
+            }
+            if self.board[xi_pole.row][xi_pole.col] == BoardCell::Negative {
+                board_col_neg_sum -= 1;
+            }
+            if self.board[xj_pole.row][xj_pole.col] == BoardCell::Negative {
+                board_col_neg_sum -= 1;
             }
             // println!("bcps {:?}", board_col_pos_sum);
             // println!("bcns {:?}", board_col_neg_sum);
@@ -563,6 +570,7 @@ impl CSP {
 
     // Generates all the constraints of the given value with respect to its neighbors
     // returns a list of binary arc constrains except for the given neighbor
+    // generating arcs for xi results in all arcs (xj, xi) where xj is a neighbor of xi
     pub fn generate_arc_constraints(
         &self,
         var_index: usize,
@@ -588,7 +596,7 @@ impl CSP {
                 arc_queue.push_back(ConstraintArc {
                     xi: neighbor_index,
                     xj: var_index,
-                    constraint: Constraint::NeighborBased(neighbor_pole_number, pole_number as u8),
+                    constraint: Constraint::SignBased(neighbor_pole_number, pole_number as u8),
                 });
             }
 
@@ -737,33 +745,22 @@ impl CSP {
         &self,
         var_index: usize,
         domains: &Domain,
+        assignment: &Assignment
     ) -> Vec<Value> {
-        return domains[var_index].clone();
         let mut ordered_domain_values: Vec<(Value, i32)> = Vec::new();
         for value in &domains[var_index] {
             let mut constraint_score = 0;
-            constraint_score += self
-                .calculate_neighbor_based_constraint_score(*value, var_index, domains);
-            // constraint_score +=
-            //     self.calculate_limits_constraint_score(value, var_index, domains, assignment);
+            constraint_score += self.calculate_constraint_score(*value, var_index, domains, assignment);
             ordered_domain_values.push((*value, constraint_score));
         }
         ordered_domain_values.sort_by(|a, b| a.1.cmp(&b.1));
+        println!("{:?}", ordered_domain_values);
         ordered_domain_values
             .iter()
             .map(|v| v.0)
             .collect::<Vec<Value>>()
     }
 
-    // fn calculate_limits_constraint_score(
-    //     &self,
-    //     value: Value,
-    //     var_index: usize,
-    //     domains: &Domain,
-    //     assignment: &Assignment,
-    // ) -> i32 {
-    //     0
-    // }
 
     pub fn get_pole_number(variable: &Variable, cell: &Point) -> u8 {
         if cell.row == variable.poles[0].row && cell.col == variable.poles[0].col {
@@ -773,70 +770,62 @@ impl CSP {
         }
     }
 
-    fn calculate_neighbor_based_constraint_score(
+    // Returns the constraint score, given the value of variable
+    fn calculate_constraint_score(
         &self,
         value: Value,
         var_index: usize,
         domains: &Domain,
+        assignment: &Assignment
     ) -> i32 {
+        let mut arc_queue: VecDeque<ConstraintArc> = VecDeque::new();
         let mut constraint_score = 0;
-        let variable = &self.variables[var_index];
-        for pole_number in 0..2 {
-            let pole = &variable.poles[pole_number];
-            let other_pole = &variable.poles[(pole_number + 1) % 2];
-            // returns the cells around the given pole.
-            let neighboring_cells = self.get_neighboring_cells(pole, other_pole);
-            let pole_number = CSP::get_pole_number(variable, pole);
-            for neighbor_cell in neighboring_cells {
-                let neighbor_index =
-                    self.board_variable_association[neighbor_cell.row][neighbor_cell.col];
-                if neighbor_index == var_index {
+        self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
+        while !arc_queue.is_empty() {
+            if let Some(constraint_arc) = arc_queue.pop_front() {
+                let (xi_pole_index, xj_pole_index) = match constraint_arc.constraint {
+                    Constraint::SignBased(xi_pole_index, xj_pole_index) => {
+                        (xi_pole_index, xj_pole_index)
+                    },
+                    Constraint::LimitBased(xi_pole_index, xj_pole_index) => {
+                        (xi_pole_index, xj_pole_index)
+                    }
+                };
+
+                let xi_index = constraint_arc.xi;
+                let xj_index = constraint_arc.xj;
+
+                if xi_index == xj_index {
                     continue;
                 }
-                let neighbor = &self.variables[neighbor_index];
-                let neighbor_pole_number = CSP::get_pole_number(neighbor, &neighbor_cell);
-                let mut increase_constraint_score = false;
+                let xi_value = assignment[xi_index];
+                let xj_value = value;
 
-                if value == Value::Pole1PositivePole2Negative {
-                    if pole_number == 0 && neighbor_pole_number == 0 {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 0 && neighbor_pole_number == 1 {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 1 && neighbor_pole_number == 0 {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 1 && neighbor_pole_number == 1 {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            increase_constraint_score = true;
-                        }
-                    }
-                } else if value == Value::Pole2PositivePole1Negative {
-                    if pole_number == 0 && neighbor_pole_number == 0 {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 0 && neighbor_pole_number == 1 {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 1 && neighbor_pole_number == 0 {
-                        if domains[neighbor_index].contains(&Value::Pole1PositivePole2Negative) {
-                            increase_constraint_score = true;
-                        }
-                    } else if pole_number == 1 && neighbor_pole_number == 1 {
-                        if domains[neighbor_index].contains(&Value::Pole2PositivePole1Negative) {
-                            increase_constraint_score = true;
+                if xi_value == Value::Unassigned {
+                    // for each value in xi domain
+                    // if the values of xj is inconsistent with the
+                    // current value of xi, then increase constraint score
+                    let mut to_be_deleted: Vec<Value> = Vec::new();
+                    for xi_value in &domains[xi_index] {
+                        let value_unwrapped = match constraint_arc.constraint {
+                            Constraint::SignBased(_, _) => {
+                                CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, xi_pole_index, xj_pole_index)
+                            },
+                            Constraint::LimitBased(_, _) => {
+                                self.get_neighbor_limit_based_inconsistent_value(xi_index, xj_index, *xi_value, xi_pole_index, xj_pole_index, assignment)
+                            }
+                        };
+                        if let Some(value) = value_unwrapped{
+                            if xj_value == value {
+                                to_be_deleted.push(*xi_value);
+                            }
                         }
                     }
-                }
-                if increase_constraint_score {
-                    constraint_score += 1;
-                    if domains[neighbor_index].len() == 1 {
+                    for _ in &to_be_deleted {
+                        constraint_score += 1;
+                    }
+                    // If this value results in a 0 domain, then increase the constraint more
+                    if to_be_deleted.len() != 0 && domains[xi_index].len() == 1 {
                         constraint_score += 5;
                     }
                 }
