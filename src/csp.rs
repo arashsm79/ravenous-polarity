@@ -181,7 +181,6 @@ impl CSP {
                     if self.is_consistent(var_index) {
                         let (feasible, inferred_domains) =
                             self.inference(var_index, &domains, &assignment);
-                        // let feasible = true;
                         if feasible {
                             if let Some(result) =
                                 self.backtrack(inferred_domains, assignment)
@@ -261,22 +260,18 @@ impl CSP {
     }
 
     pub fn revise(&self, constraint_arc: &ConstraintArc, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
-        match constraint_arc.constraint {
-            Constraint::NeighborBased(pole_xi, pole_xj) => {
-                self.revise_pole_constraint(constraint_arc.xi, constraint_arc.xj, pole_xi, pole_xj, inferred_domains, assignment)
+        let (xi_pole_index, xj_pole_index) = match constraint_arc.constraint {
+            Constraint::NeighborBased(xi_pole_index, xj_pole_index) => {
+                (xi_pole_index, xj_pole_index)
             },
-            Constraint::LimitBased(pole_xi, pole_xj) => {
-                self.revise_limit_constraint(constraint_arc.xi, constraint_arc.xj, pole_xi, pole_xj, inferred_domains, assignment)
-                // (true, false)
+            Constraint::LimitBased(xi_pole_index, xj_pole_index) => {
+                (xi_pole_index, xj_pole_index)
             }
-        }
-    }
+        };
 
-    // Revise the domains based on the neighboring cells and their signs. (two positives or two
-    // negatives can't be next to each other.
-    // returns: (feasible, revised)
-    // feasible is false if any domain is reduced to zero
-    fn revise_pole_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
+        let xi_index = constraint_arc.xi;
+        let xj_index = constraint_arc.xj;
+
         if xi_index == xj_index {
             return (false, false)
         }
@@ -290,7 +285,15 @@ impl CSP {
                 let mut to_be_deleted: Vec<Value> = Vec::new();
                 let mut constraint_count = 0;
                 for xi_value in &inferred_domains[xi_index] {
-                    if let Some(value) = CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, xi_pole_index, xj_pole_index) {
+                    let value_unwrapped = match constraint_arc.constraint {
+                        Constraint::NeighborBased(_, _) => {
+                            CSP::get_neighbor_pole_based_inconsistent_value(*xi_value, xi_pole_index, xj_pole_index)
+                        },
+                        Constraint::LimitBased(_, _) => {
+                            self.get_neighbor_limit_based_inconsistent_value(xi_index, xj_index, *xi_value, xi_pole_index, xj_pole_index, assignment)
+                        }
+                    };
+                    if let Some(value) = value_unwrapped{
                         if assignment[xj_index] != Value::Unassigned && assignment[xj_index] == value {
                                 to_be_deleted.push(*xi_value);
                         } else if inferred_domains[xj_index].contains(&value) {
@@ -312,41 +315,6 @@ impl CSP {
         }
         (true, revised)
     }
-
-    fn revise_limit_constraint(&self, xi_index: VariableIndex, xj_index: VariableIndex, xi_pole_index: PoleNumber, xj_pole_index: PoleNumber, inferred_domains: &mut Domain, assignment: &Assignment) -> (bool, bool) {
-        let xi_value = assignment[xi_index];
-        let mut revised = false;
-
-        if xi_value == Value::Unassigned {
-                // for each value in xi domain
-                // if there are no values avalaible in xj's domain that are consistent with the
-                // current value of xi, then delete the current value of xi
-                let mut to_be_deleted: Vec<Value> = Vec::new();
-                let mut constraint_count = 0;
-                for xi_value in &inferred_domains[xi_index] {
-                    if let Some(value) = self.get_neighbor_limit_based_inconsistent_value(xi_index, xj_index, *xi_value, xi_pole_index, xj_pole_index, assignment) {
-                        // println!("inconsistent value: {:?}", value);
-                        if assignment[xj_index] != Value::Unassigned && assignment[xj_index] == value {
-                                to_be_deleted.push(*xi_value);
-                        } else if inferred_domains[xj_index].contains(&value) {
-                            constraint_count += 1;
-                        }
-                    }
-                    if constraint_count == inferred_domains[xj_index].len() {
-                        to_be_deleted.push(*xi_value);
-                    }
-                }
-                revised = !to_be_deleted.is_empty();
-                for value in to_be_deleted {
-                    CSP::remove_value_from_domain(value, &mut inferred_domains[xi_index]);
-                }
-        }
-
-        if inferred_domains[xi_index].len() == 0 {
-            return (false, false)
-        }
-        (true, revised)
-    } 
 
     // Given the value of xi, this function retuns the value that xj cant be based on the limits of
     // positive and negatives signs in each row
@@ -368,7 +336,7 @@ impl CSP {
 
         // if the constrained poles of xi and xj are on the same row:
         if xi_pole.row == xj_pole.row {
-            let mut board_row_pos_sum = 0;
+            let mut board_row_pos_sum = self.curr_row_pos_poles[xi_pole.row];
             let mut board_row_neg_sum = 0;
             for i in 0..self.col_size {
                 // dont count the poels of xi and xj
