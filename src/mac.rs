@@ -3,6 +3,7 @@ use std::collections::VecDeque;
 
 impl CSP {
 
+    // AC3
     pub fn maintaining_arc_consistency(
         &self,
         domains: &Domain,

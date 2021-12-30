@@ -741,12 +741,15 @@ impl CSP {
         }
     }
 
+    // LCV 
     fn order_domain_values(
         &self,
         var_index: usize,
         domains: &Domain,
         assignment: &Assignment
     ) -> Vec<Value> {
+        // Turn of LCV
+        // return domains[var_index].clone();
         let mut ordered_domain_values: Vec<(Value, i32)> = Vec::new();
         for value in &domains[var_index] {
             let mut constraint_score = 0;
@@ -754,7 +757,6 @@ impl CSP {
             ordered_domain_values.push((*value, constraint_score));
         }
         ordered_domain_values.sort_by(|a, b| a.1.cmp(&b.1));
-        println!("{:?}", ordered_domain_values);
         ordered_domain_values
             .iter()
             .map(|v| v.0)
