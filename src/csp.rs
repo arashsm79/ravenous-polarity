@@ -10,7 +10,12 @@ pub struct CSP {
     pub board: Vec<Vec<BoardCell>>,
     pub board_variable_association: Vec<Vec<usize>>,
     pub variables: Vec<Variable>,
-    pub inference_mode: InferenceMode
+    pub inference_mode: InferenceMode,
+
+    curr_row_pos_poles: Vec<i32>,
+    curr_row_neg_poles: Vec<i32>,
+    curr_col_pos_poles: Vec<i32>,
+    curr_col_neg_poles: Vec<i32>,
 }
 
 #[derive(Debug, Clone)]
@@ -44,6 +49,7 @@ pub enum BoardCell {
     Positive,
     Negative,
     Empty,
+    Unassigned,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -77,7 +83,7 @@ impl CSP {
         mut raw_board: Vec<Vec<u8>>,
         inference_mode: InferenceMode
     ) -> CSP {
-        let board = vec![vec![BoardCell::Empty; col_size]; row_size];
+        let board = vec![vec![BoardCell::Unassigned; col_size]; row_size];
         let mut board_variable_association = vec![vec![0; col_size]; row_size];
         let mut variables: Vec<Variable> = Vec::new();
         let mut variable_index = 0;
@@ -129,6 +135,10 @@ impl CSP {
             }
         }
         CSP {
+            curr_row_pos_poles: vec![0; row_pos_poles.len()],
+            curr_row_neg_poles: vec![0; row_neg_poles.len()],
+            curr_col_pos_poles: vec![0; col_pos_poles.len()],
+            curr_col_neg_poles: vec![0; col_neg_poles.len()],
             row_size,
             col_size,
             row_pos_poles,
@@ -138,7 +148,7 @@ impl CSP {
             board,
             board_variable_association,
             variables,
-            inference_mode
+            inference_mode,
         }
     }
 
@@ -152,18 +162,14 @@ impl CSP {
             ];
             self.variables.len()
         ];
-        self.backtrack(&initial_domain, &mut initial_assignment, 100)
+        self.backtrack(initial_domain, &mut initial_assignment)
     }
 
     fn backtrack(
         &mut self,
-        domains: &Domain,
+        domains: Domain,
         assignment: &mut Assignment,
-        depth: u32,
     ) -> Option<Assignment> {
-
-        // println!("{:?}", assignment);
-        // self.print_board();
 
         if self.is_complete(&assignment) {
             return Some(assignment.clone());
@@ -173,22 +179,41 @@ impl CSP {
             for value in self.order_domain_values(var_index, &domains) {
                 if self.assign(value, var_index, assignment) {
                     if self.is_consistent(var_index) {
-                        // let (feasible, inferred_domains) =
-                        //     self.inference(var_index, &domains, &assignment);
-                        let feasible = true;
+                        let (feasible, inferred_domains) =
+                            self.inference(var_index, &domains, &assignment);
+                        // let feasible = true;
                         if feasible {
                             if let Some(result) =
-                                self.backtrack(domains, assignment, depth - 1)
+                                self.backtrack(inferred_domains, assignment)
                             {
                                 return Some(result);
                             }
                         }
                     }
-                    self.unassign(var_index, assignment);
+                    self.unassign(value, var_index, assignment);
                 }
             }
         }
         None
+    }
+
+    fn inference(
+        &self,
+        var_index: usize,
+        domains: &Domain,
+        assignment: &Assignment,
+    ) -> (bool, Domain) {
+
+        let mut arc_queue: VecDeque<ConstraintArc> = VecDeque::new();
+
+        self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
+        if self.inference_mode == InferenceMode::FC {
+            self.forward_checking(domains, assignment, arc_queue)
+        } else if self.inference_mode == InferenceMode::MAC {
+            self.maintaining_arc_consistency(domains, assignment, arc_queue)
+        } else {
+            (false, domains.clone())
+        }
     }
 
     pub fn remove_value_from_domain(value: Value, domain: &mut Vec<Value>) -> bool {
@@ -579,11 +604,11 @@ impl CSP {
     )  {
         let variable = &self.variables[var_index];
         // generate arcs for each pole
-        for pole in &variable.poles {
-            let pole_number = CSP::get_pole_number(variable, pole);
+        for pole_number in 0..2 {
+            let pole = &variable.poles[pole_number];
+            let other_pole = &variable.poles[(pole_number + 1) % 2];
 
-            // Neighbor based constraints
-            let neighboring_cells = self.get_neighboring_cells(pole);
+            let neighboring_cells = self.get_neighboring_cells(pole, other_pole);
             for neighbor_cell in neighboring_cells {
                 let neighbor_index =
                     self.board_variable_association[neighbor_cell.row][neighbor_cell.col];
@@ -595,12 +620,12 @@ impl CSP {
                 arc_queue.push_back(ConstraintArc {
                     xi: neighbor_index,
                     xj: var_index,
-                    constraint: Constraint::NeighborBased(neighbor_pole_number, pole_number),
+                    constraint: Constraint::NeighborBased(neighbor_pole_number, pole_number as u8),
                 });
             }
 
             // Limit based constraints
-            let neighboring_cells = self.get_limiting_cells(pole);
+            let neighboring_cells = self.get_limiting_cells(pole, other_pole);
             for neighbor_cell in neighboring_cells {
                 let neighbor_index =
                     self.board_variable_association[neighbor_cell.row][neighbor_cell.col];
@@ -612,29 +637,9 @@ impl CSP {
                 arc_queue.push_back(ConstraintArc {
                     xi: neighbor_index,
                     xj: var_index,
-                    constraint: Constraint::LimitBased(neighbor_pole_number, pole_number),
+                    constraint: Constraint::LimitBased(neighbor_pole_number, pole_number as u8),
                 });
             }
-        }
-    }
-
-    fn inference(
-        &self,
-        var_index: usize,
-        domains: &Domain,
-        assignment: &Assignment,
-    ) -> (bool, Domain) {
-
-        return (true, domains.clone());
-        let mut arc_queue: VecDeque<ConstraintArc> = VecDeque::new();
-
-        self.generate_arc_constraints(var_index, assignment, &mut arc_queue, var_index);
-        if self.inference_mode == InferenceMode::FC {
-            self.forward_checking(domains, assignment, arc_queue)
-        } else if self.inference_mode == InferenceMode::MAC {
-            self.maintaining_arc_consistency(domains, assignment, arc_queue)
-        } else {
-            (false, domains.clone())
         }
     }
 
@@ -664,6 +669,9 @@ impl CSP {
                     BoardCell::Empty => {
                         print!("   {}", ' ');
                     }
+                    BoardCell::Unassigned => {
+                        print!("   {}", '*');
+                    }
                 }
             }
             println!();
@@ -674,21 +682,29 @@ impl CSP {
         let v = &self.variables[var_index];
         match value {
             Value::Pole1PositivePole2Negative => {
-                if self.board[v.poles[0].row][v.poles[0].col] == BoardCell::Empty
-                    && self.board[v.poles[1].row][v.poles[1].col] == BoardCell::Empty
+                if self.board[v.poles[0].row][v.poles[0].col] == BoardCell::Unassigned
+                    && self.board[v.poles[1].row][v.poles[1].col] == BoardCell::Unassigned
                 {
                     self.board[v.poles[0].row][v.poles[0].col] = BoardCell::Positive;
                     self.board[v.poles[1].row][v.poles[1].col] = BoardCell::Negative;
+                    self.curr_row_pos_poles[v.poles[0].row] += 1;
+                    self.curr_col_pos_poles[v.poles[0].col] += 1;
+                    self.curr_row_neg_poles[v.poles[1].row] += 1;
+                    self.curr_col_neg_poles[v.poles[1].col] += 1;
                 } else {
                     return false;
                 }
             }
             Value::Pole2PositivePole1Negative => {
-                if self.board[v.poles[0].row][v.poles[0].col] == BoardCell::Empty
-                    && self.board[v.poles[1].row][v.poles[1].col] == BoardCell::Empty
+                if self.board[v.poles[0].row][v.poles[0].col] == BoardCell::Unassigned
+                    && self.board[v.poles[1].row][v.poles[1].col] == BoardCell::Unassigned
                 {
                     self.board[v.poles[0].row][v.poles[0].col] = BoardCell::Negative;
                     self.board[v.poles[1].row][v.poles[1].col] = BoardCell::Positive;
+                    self.curr_row_neg_poles[v.poles[0].row] += 1;
+                    self.curr_col_neg_poles[v.poles[0].col] += 1;
+                    self.curr_row_pos_poles[v.poles[1].row] += 1;
+                    self.curr_col_pos_poles[v.poles[1].col] += 1;
                 } else {
                     return false;
                 }
@@ -703,10 +719,25 @@ impl CSP {
         true
     }
 
-    fn unassign(&mut self, var_index: usize, assignment: &mut Assignment) {
+    fn unassign(&mut self, value: Value, var_index: usize, assignment: &mut Assignment) {
         let v = &self.variables[var_index];
-        self.board[v.poles[0].row][v.poles[0].col] = BoardCell::Empty;
-        self.board[v.poles[1].row][v.poles[1].col] = BoardCell::Empty;
+        self.board[v.poles[0].row][v.poles[0].col] = BoardCell::Unassigned;
+        self.board[v.poles[1].row][v.poles[1].col] = BoardCell::Unassigned;
+        match value {
+            Value::Pole1PositivePole2Negative => {
+                    self.curr_row_pos_poles[v.poles[0].row] -= 1;
+                    self.curr_col_pos_poles[v.poles[0].col] -= 1;
+                    self.curr_row_neg_poles[v.poles[1].row] -= 1;
+                    self.curr_col_neg_poles[v.poles[1].col] -= 1;
+            }
+            Value::Pole2PositivePole1Negative => {
+                    self.curr_row_neg_poles[v.poles[0].row] -= 1;
+                    self.curr_col_neg_poles[v.poles[0].col] -= 1;
+                    self.curr_row_pos_poles[v.poles[1].row] -= 1;
+                    self.curr_col_pos_poles[v.poles[1].col] -= 1;
+            }
+            _ => {},
+        }
         assignment[var_index] = Value::Unassigned;
     }
 
@@ -782,9 +813,11 @@ impl CSP {
     ) -> i32 {
         let mut constraint_score = 0;
         let variable = &self.variables[var_index];
-        for pole in &variable.poles {
+        for pole_number in 0..2 {
+            let pole = &variable.poles[pole_number];
+            let other_pole = &variable.poles[(pole_number + 1) % 2];
             // returns the cells around the given pole.
-            let neighboring_cells = self.get_neighboring_cells(pole);
+            let neighboring_cells = self.get_neighboring_cells(pole, other_pole);
             let pole_number = CSP::get_pole_number(variable, pole);
             for neighbor_cell in neighboring_cells {
                 let neighbor_index =
@@ -845,27 +878,35 @@ impl CSP {
     }
 
     // Returns the four neighbors of a cell
-    pub fn get_neighboring_cells(&self, cell: &Point) -> Vec<Point> {
+    pub fn get_neighboring_cells(&self, cell: &Point, same_variable_cell: &Point) -> Vec<Point> {
         let mut neighboring_cells: Vec<Point> = Vec::new();
-        if cell.row + 1 < self.row_size {
+        if cell.row + 1 < self.row_size
+        && cell.row + 1 != same_variable_cell.row
+        && cell.col != same_variable_cell.col {
             neighboring_cells.push(Point {
                 row: cell.row + 1,
                 col: cell.col,
             });
         }
-        if cell.row as i64 - 1 >= 0 {
+        if cell.row as i64 - 1 >= 0
+        && cell.row as i64 - 1 != same_variable_cell.row as i64
+        && cell.col != same_variable_cell.col {
             neighboring_cells.push(Point {
                 row: cell.row - 1,
                 col: cell.col,
             });
         }
-        if cell.col + 1 < self.col_size {
+        if cell.col + 1 < self.col_size
+        && cell.row != same_variable_cell.row
+        && cell.col + 1 != same_variable_cell.col {
             neighboring_cells.push(Point {
                 row: cell.row,
                 col: cell.col + 1,
             });
         }
-        if cell.col as i64 - 1 >= 0 {
+        if cell.col as i64 - 1 >= 0
+        && cell.row != same_variable_cell.row
+        && cell.col as i64 - 1 != same_variable_cell.col as i64 {
             neighboring_cells.push(Point {
                 row: cell.row,
                 col: cell.col - 1,
@@ -875,20 +916,26 @@ impl CSP {
     }
 
     // Returns cells that are on the same row and col as the given cell.
-    pub fn get_limiting_cells(&self, cell: &Point) -> Vec<Point> {
+    pub fn get_limiting_cells(&self, cell: &Point, same_variable_cell: &Point) -> Vec<Point> {
         let mut neighboring_cells: Vec<Point> = Vec::new();
         for i in 0..self.row_size {
             if i == cell.row {
                 continue;
             }
-            neighboring_cells.push(Point { row: i, col: cell.col });
+            if i != same_variable_cell.row
+            && cell.col != same_variable_cell.col {
+                neighboring_cells.push(Point { row: i, col: cell.col });
+            }
         }
 
         for j in 0..self.col_size {
             if j == cell.col {
                 continue;
             }
-            neighboring_cells.push(Point { row: cell.row, col: j });
+            if cell.row != same_variable_cell.row
+            && j != same_variable_cell.col {
+                neighboring_cells.push(Point { row: cell.row, col: j });
+            }
         }
         neighboring_cells
     }
@@ -900,132 +947,174 @@ impl CSP {
         {
             return false;
         }
-        // check rows limits for pos and neg
-        for i in 0..self.row_size {
-            let mut count_pos = 0;
-            let mut count_neg = 0;
-            for j in 0..self.col_size {
-                if self.board[i][j] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[i][j] == BoardCell::Negative {
-                    count_neg += 1;
+
+        true
+    }
+
+    fn check_neighbors_pole_sign_constraint(&self, cell: &Point) -> bool {
+        let value = &self.board[cell.row][cell.col];
+        match value {
+            BoardCell::Positive => {
+                if cell.row + 1 < self.row_size {
+                    if self.board[cell.row + 1][cell.col] == BoardCell::Positive {
+                        return false;
+                    }
                 }
-            }
-            if count_pos != self.row_pos_poles[i] || count_neg != self.row_neg_poles[i] {
-                return false;
-            }
-        }
-        // check column limits for pos and neg
-        for j in 0..self.col_size {
-            let mut count_pos = 0;
-            let mut count_neg = 0;
-            for i in 0..self.row_size {
-                if self.board[i][j] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[i][j] == BoardCell::Negative {
-                    count_neg += 1;
+                if cell.row as i64 - 1 >= 0 {
+                    if self.board[cell.row - 1][cell.col] == BoardCell::Positive {
+                        return false;
+                    }
                 }
-            }
-            if count_pos != self.col_pos_poles[j] || count_neg != self.col_neg_poles[j] {
-                return false;
-            }
+                if cell.col + 1 < self.col_size {
+                    if self.board[cell.row][cell.col + 1] == BoardCell::Positive {
+                        return false;
+                    }
+                }
+                if cell.col as i64 - 1 >= 0 {
+                    if self.board[cell.row][cell.col - 1] == BoardCell::Positive {
+                        return false;
+                    }
+                }
+            },
+            BoardCell::Negative => {
+                if cell.row + 1 < self.row_size {
+                    if self.board[cell.row + 1][cell.col] == BoardCell::Negative {
+                        return false;
+                    }
+                }
+                if cell.row as i64 - 1 >= 0 {
+                    if self.board[cell.row - 1][cell.col] == BoardCell::Negative {
+                        return false;
+                    }
+                }
+                if cell.col + 1 < self.col_size {
+                    if self.board[cell.row][cell.col + 1] == BoardCell::Negative {
+                        return false;
+                    }
+                }
+                if cell.col as i64 - 1 >= 0 {
+                    if self.board[cell.row][cell.col - 1] == BoardCell::Negative {
+                        return false;
+                    }
+                }
+            },
+            _ => {}
         }
         true
     }
 
     fn is_consistent(&self, var_index: VariableIndex) -> bool {
         let var = &self.variables[var_index];
+        // pole sign based cinssitency
+        for pole in &var.poles {
+            if !self.check_neighbors_pole_sign_constraint(pole) {
+                return false
+            }
+        }
+
+        // limit based consistency
         // if this is a horizontal magnet
         if var.poles[0].row == var.poles[1].row {
             let poles_row = var.poles[0].row;
-            // check row limits for pos and neg
-            let mut count_pos = 0;
-            let mut count_neg = 0;
+
+            // if all the cells in this row are assigned
+            // then the curr limit of this row has to be equal to the total limit of this row
+            let mut poles_row_all_assigned = true;
             for j in 0..self.col_size {
-                if self.board[poles_row][j] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[poles_row][j] == BoardCell::Negative {
-                    count_neg += 1;
-                }
+                poles_row_all_assigned &= self.board[poles_row][j] != BoardCell::Unassigned;
             }
-            if count_pos > self.row_pos_poles[poles_row] || count_neg > self.row_neg_poles[poles_row] {
-                return false;
+            if poles_row_all_assigned {
+                if self.curr_row_pos_poles[poles_row] != self.row_pos_poles[poles_row]
+                || self.curr_row_neg_poles[poles_row] != self.row_neg_poles[poles_row] {
+                    return false
+                }
             }
 
-            let poles_col = var.poles[0].col;
-            // check pole 1 col limits for pos and neg
-            count_pos = 0;
-            count_neg = 0;
-            for i in 0..self.row_size {
-                if self.board[i][poles_col] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[i][poles_col] == BoardCell::Negative {
-                    count_neg += 1;
-                }
-            }
-            if count_pos > self.col_pos_poles[poles_col] || count_neg > self.col_neg_poles[poles_col] {
-                return false;
+            // if there are some unassigned cells left then the curr limit has to be lower than the
+            // total limit for that row
+            if self.curr_row_pos_poles[poles_row] > self.row_pos_poles[poles_row]
+                || self.curr_row_neg_poles[poles_row] > self.row_neg_poles[poles_row] {
+                return false
             }
 
-            let poles_col = var.poles[1].col;
-            // check pole 2 col limits for pos and neg
-            count_pos = 0;
-            count_neg = 0;
+            let pole1_col = var.poles[0].col;
+            let pole2_col = var.poles[1].col;
+
+            let mut pole1_col_all_assigned = true;
             for i in 0..self.row_size {
-                if self.board[i][poles_col] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[i][poles_col] == BoardCell::Negative {
-                    count_neg += 1;
+                pole1_col_all_assigned &= self.board[i][pole1_col] != BoardCell::Unassigned;
+            }
+            if pole1_col_all_assigned {
+                if self.curr_col_pos_poles[pole1_col] != self.col_pos_poles[pole1_col]
+                || self.curr_col_neg_poles[pole1_col] != self.col_neg_poles[pole1_col] {
+                    return false
                 }
             }
-            if count_pos > self.col_pos_poles[poles_col] || count_neg > self.col_neg_poles[poles_col] {
-                return false;
+            let mut pole2_col_all_assigned = true;
+            for i in 0..self.row_size {
+                pole2_col_all_assigned &= self.board[i][pole2_col] != BoardCell::Unassigned;
+            }
+            if pole2_col_all_assigned {
+                if self.curr_col_pos_poles[pole2_col] != self.col_pos_poles[pole2_col]
+                || self.curr_col_neg_poles[pole2_col] != self.col_neg_poles[pole2_col] {
+                    return false
+                }
+            }
+
+            if self.curr_col_pos_poles[pole1_col] > self.col_pos_poles[pole1_col]
+                || self.curr_col_neg_poles[pole1_col] > self.col_neg_poles[pole1_col] {
+                return false
+            }
+            if self.curr_col_pos_poles[pole2_col] > self.col_pos_poles[pole2_col]
+                || self.curr_col_neg_poles[pole2_col] > self.col_neg_poles[pole2_col] {
+                return false
             }
         // if this is a vertical magnet
         } else if var.poles[0].col == var.poles[1].col {
-            let poles_row = var.poles[0].row;
-            // check pole 1 row limits for pos and neg
-            let mut count_pos = 0;
-            let mut count_neg = 0;
+            let pole1_row = var.poles[0].row;
+            let pole2_row = var.poles[1].row;
+            let mut pole1_row_all_assigned = true;
             for j in 0..self.col_size {
-                if self.board[poles_row][j] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[poles_row][j] == BoardCell::Negative {
-                    count_neg += 1;
+                pole1_row_all_assigned &= self.board[pole1_row][j] != BoardCell::Unassigned;
+            }
+            if pole1_row_all_assigned {
+                if self.curr_row_pos_poles[pole1_row] != self.row_pos_poles[pole1_row]
+                || self.curr_row_neg_poles[pole1_row] != self.row_neg_poles[pole1_row] {
+                    return false
                 }
             }
-            if count_pos > self.row_pos_poles[poles_row] || count_neg > self.row_neg_poles[poles_row] {
-                return false;
-            }
-
-            let poles_row = var.poles[1].row;
-            // check pole 2 row limits for pos and neg
-            count_pos = 0;
-            count_neg = 0;
+            let mut pole2_row_all_assigned = true;
             for j in 0..self.col_size {
-                if self.board[poles_row][j] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[poles_row][j] == BoardCell::Negative {
-                    count_neg += 1;
+                pole2_row_all_assigned &= self.board[pole2_row][j] != BoardCell::Unassigned;
+            }
+            if pole2_row_all_assigned {
+                if self.curr_row_pos_poles[pole2_row] != self.row_pos_poles[pole2_row]
+                || self.curr_row_neg_poles[pole2_row] != self.row_neg_poles[pole2_row] {
+                    return false
                 }
             }
-            if count_pos > self.row_pos_poles[poles_row] || count_neg > self.row_neg_poles[poles_row] {
-                return false;
+            if self.curr_row_pos_poles[pole1_row] > self.row_pos_poles[pole1_row]
+                || self.curr_row_neg_poles[pole1_row] > self.row_neg_poles[pole1_row] {
+                return false
             }
-
+            if self.curr_row_pos_poles[pole2_row] > self.row_pos_poles[pole2_row]
+                || self.curr_row_neg_poles[pole2_row] > self.row_neg_poles[pole2_row] {
+                return false
+            }
             let poles_col = var.poles[0].col;
-            // check col limits for pos and neg
-            count_pos = 0;
-            count_neg = 0;
+            let mut poles_col_all_assigned = false;
             for i in 0..self.row_size {
-                if self.board[i][poles_col] == BoardCell::Positive {
-                    count_pos += 1;
-                } else if self.board[i][poles_col] == BoardCell::Negative {
-                    count_neg += 1;
+                poles_col_all_assigned &= self.board[i][poles_col] != BoardCell::Unassigned;
+            }
+            if poles_col_all_assigned {
+                if self.curr_col_pos_poles[poles_col] != self.col_pos_poles[poles_col]
+                || self.curr_col_neg_poles[poles_col] != self.col_neg_poles[poles_col] {
+                    return false
                 }
             }
-            if count_pos > self.col_pos_poles[poles_col] || count_neg > self.col_neg_poles[poles_col] {
-                return false;
+            if self.curr_col_pos_poles[poles_col] > self.col_pos_poles[poles_col]
+                || self.curr_col_neg_poles[poles_col] > self.col_neg_poles[poles_col] {
+                return false
             }
         }
         true
